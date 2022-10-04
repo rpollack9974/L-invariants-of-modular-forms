@@ -1,4 +1,4 @@
-# L-invariants
+# $\mathcal L$-invariants of modular forms
 This repository contains:
 
 (1) code to compute L-invariants of modular forms using p-adic L-functions following the algorithms in
