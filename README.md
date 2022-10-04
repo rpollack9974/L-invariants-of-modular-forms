@@ -3,6 +3,6 @@ This repository contains code to compute L-invariants of modular forms using p-a
 
     John Bergdall, Robert Pollack, L-invariants via p-adic L-functions: computations and a distribution conjecture, preprint.
 
-It also contains data of the p-adic valuations of L-invariants of modular forms at various levels typically dividing a product of small primes.
+It also contains data of the p-adic valuations of L-invariants of thousands of modular forms at various levels typically dividing a product of small primes.
 
     
