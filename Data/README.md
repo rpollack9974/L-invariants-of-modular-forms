@@ -1,23 +1,45 @@
-This directory contains files of the form Gamma0-N_all.csv.  Each such file contains the data of the slopes of the $\mathcal L$-invariants of forms of level $N$ with respect to all primes such that $p||N$.
+This directory contains files of the form Gamma0-M_all.csv.  
+
+Each such file contains the data of the slopes ($p$-adic valuations) of the $\mathcal L$-invariants of forms of level $M$ with respect to all primes such that $p||M$.
 
 The columns of the csv file are labelled as:
 
 p,	Nnew,	k,	LMFDB_label,	sLinv,	sLderiv,	sLval,	twist,	ap_sign,	rhobar,	epp,	fpp
 
-which now explain.
+Here is what these means:
 
-p = prime <br>
-Nnew = level of the modular form (so $p || Nnew$)<br>
-k = weight <br>
-LMFDB_label = LMFDB label of the modular form<br>
-sLinv = $p$-adic valuation of $\mathcal L$-invariant at some prime $\mathfrak P$ over $p$ in the Hecke field of the modular form<br>
-sLderiv = $p$-adic valuation of special value of the $p$-adic $L$-function used to compute $\mathcal L$-invariant<br>
-sLval = $p$-adic valuation of special value of the complex $L$-function used to compute $\mathcal L$-invariant
-  the exceptional zero conjecture gives taht sLinv = sLderiv - sLval<br>
-twist = conductor of the quadratic character used to twist to ensure the complex $L$-value is non-zero<br>
-ap_sign = the sign of $a_p$ of the given modular form<br>
-rhobar = a list whose entries are of the form q,[a_n,...,a_0] which represents the fact that the minimal polynomial of $a_q\mod \mathfrak P$ is $\sum_i a_i x^i$<br>
-epp = ramification index of $\mathfrak P$ over $p$ <br>
-fpp = interial degree of $\mathfrak P$ over $p$
+- p = prime
+- Nnew = level of the eigenform (so $p || Nnew$)
+- k = weight 
+- LMFDB_label = LMFDB label of the eigenform
+- sLinv = slope of the $\mathcal L$-invariant of the eigenform, with respect to the normalized $\mathfrak P$-adic valuation, for some (unspecified) prime $\mathfrak P$ above $p$ in the Hecke field of the eigenform
+- sLderiv = slope of the derivaitive (with respect to...) of $p$-adic $L$-function at the central value (used to compute $\mathcal L$-invariant)
+- sLval = slope of the algebraic part of the central value (with respect to...) of the complex $L$-series (used to compute $\mathcal L$-invariant)
+- twist = conductor of the quadratic character used to twist to ensure the complex $L$-value is non-zero
+- ap_sign = the sign of $a_p$ of the eigenform (only +/- 1)
+- rhobar = a list whose entries are of the form q,[a_n,...,a_0] that represents minimal polynomial of $a_q\mod \mathfrak P$ --- namely the min poly should be $\sum_i a_i x^i$
+- epp = ramification index of $\mathfrak P$ over $p$
+- fpp = interial degree of $\mathfrak P$ over $p$
 
+_Note_: Some of the headers may be in a different order.
 
+Here is also a table listing the minimum and maximum weights and total number of data, in each file.
+
+| Level      | Minimum weight | Maximum Weight | Number data | Missing weight(s) |
+| ---------- | -------------- | -------------- | ----------- | ----------------- |
+| Gamma0(2)  | 8              | 804            | 13466       |                   |
+| Gamma0(3)  | 6              | 508            | 10752       |                   |
+| Gamma0(5)  | --             | --             | --          |                   |
+| Gamma0(6)  | --             | --             | --          |                   |
+| Gamma0(7)  | 4              | 290            | 10512       |                   |
+| Gamma0(10) | --             | --             | --          |                   |
+| Gamma0(11) | 4              | 200            | 8332        |                   |
+| Gamma0(13) | 4              | 174            | 7433        | 136               |
+| Gamma0(15) | 4              | 148            | 7188        | 84                |
+| Gamma0(21) | 4              | 142            | 10080       |                   |
+| Gamma0(33) | 2              | 84             | 5882        |                   |
+| Gamma0(35) | 2              | 82             | 6726        |                   |
+| Gamma0(51) | 2              | 88             | 10100       | 86 (p=3)          |
+| Gamma0(70) | 
+
+_Note_: Each eigenform has an $\mathcal L$-invariant at each prime dividing the level. The number of data is therefore not the number of eigenforms, but the number of eigenforms times the number of distinct prime divisors.
