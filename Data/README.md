@@ -35,11 +35,15 @@ Here is also a table listing the minimum and maximum weights and total number of
 | Gamma0(10) | --             | --             | --          |                   |
 | Gamma0(11) | 4              | 200            | 8332        |                   |
 | Gamma0(13) | 4              | 174            | 7433        | 136               |
+| Gamma0(14) | --             | --             | --          |                   |
 | Gamma0(15) | 4              | 148            | 7188        | 84                |
 | Gamma0(21) | 4              | 142            | 10080       |                   |
 | Gamma0(33) | 2              | 84             | 5882        |                   |
 | Gamma0(35) | 2              | 82             | 6726        |                   |
+| Gamma0(45) | --             | --             | --          |                   |
 | Gamma0(51) | 2              | 88             | 10100       | 86 (p=3)          |
-| Gamma0(70) | 
+| Gamma0(70) | 6              | 44             | 1834        | 44 (p=7)          |
+| Gamma0(85) | --             | --             | --          |                   |
+| Gamma0(105)| 4              | 54             | 8736        |                   |
 
 _Note_: Each eigenform has an $\mathcal L$-invariant at each prime dividing the level. The number of data is therefore not the number of eigenforms, but the number of eigenforms times the number of distinct prime divisors.
