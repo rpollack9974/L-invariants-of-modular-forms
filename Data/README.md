@@ -30,9 +30,9 @@ Here is also a table listing the minimum and maximum weights and total number of
 | Gamma0(2)  | 8              | 804            | 13466       |                   |
 | Gamma0(3)  | 6              | 508            | 10752       |                   |
 | Gamma0(5)  | --             | --             | --          |                   |
-| Gamma0(6)  | 4              | 350            | 10033       | 346 (p=3)         |
+| Gamma0(6)  | 4              | 350            | 10033       | 346 (p=3), 348    |
 | Gamma0(7)  | 4              | 290            | 10512       |                   |
-| Gamma0(10) | 4              | 282            | 12437       | 274 (p=5)         |
+| Gamma0(10) | 4              | 282            | 12437       | 268, 272, 276, 280 (both p) and 274 (p=5)         |
 | Gamma0(11) | 4              | 200            | 8332        |                   |
 | Gamma0(13) | 4              | 174            | 7433        | 136               |
 | Gamma0(14) | 2              | 266            | 8071        | 252,256-264 (p=2) |
