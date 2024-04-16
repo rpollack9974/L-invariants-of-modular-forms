@@ -1,0 +1,1204 @@
+/*
+L-invariant code. Version of May 2022.
+
+Contents:
+
+	1) Routines to calculate values of modular symbols and central values of twists by quadratic Dirichlet characters.
+	2) Routines to calculate central values of L-functions and normalize (w/r/t to a prime) modular symbols by periods.
+	3) Routines for calculating the p-adic moments of the distribution mu_MS.
+	4)
+	
+Notes:
+
+	Throughout the code there is "MS" and it is assumed that MS is a Galois orbit of *newforms*. This means
+	in particular that they are new at their own level. So, when we call Level(MS) we expect the new level.
+
+*/
+
+load "io.magma"; // custom input/output commands
+Attach("montes.m");
+Attach("+Ideals.m");
+load "montes_helper.magma";
+load "rings.magma";
+load "matrix.magma";
+load "p1.magma";
+load "funddomain.magma";
+load "eigensystems.magma";
+
+/******
+
+SECTION 1: Calculating values of modular symbols.
+
+*/
+
+// INITIALIZE RATIONAL NUMBERS AND SYMMETRIC POLYNOMIALS
+Q := Rationals();
+Sym<X,Y>:=PolynomialRing(Q,2);
+
+/* modularpath(MS,P,rat)
+
+Input:
+	MS: A Hecke simple space of modular symbols representing a Galois orbit of newforms.
+	P: A polynomial in Sym<X,Y>
+	rat: A rational number
+
+Output:
+	ASK ROB: does this work for level 1?
+	
+	MS := GetCuspidalModularSymbolsSpace(1,12);
+	modularpath(MS,X^5*Y^5,0);
+	
+	Shouldn't this be related to the L-function?
+
+	ROB answer: MS has sign +1 (by default) but X^5*Y^5 corresponds to an odd character
+
+*/
+function modularpath(MS,P,rat)
+        return((MS!<P,[Cusps()|Infinity(),rat]>)`element);
+end function;
+         
+/* find_magic_vector(MS)
+
+Input:
+ MS: A Hecke simple space of modular symbols representing a Galois orbit of newforms.
+ 
+Ouput:
+ The "magic vector"...which is?!
+
+*/
+function find_magic_vector(MS:min_dim:=1,scale:=false,verbose:=false)
+	d := Dimension(MS);
+	T0 := get_time_print("Finding magic vector for M:" cat Sprint(MS):verbose:=verbose);
+	if Dimension(MS) eq min_dim then
+		v := DualVectorSpace(MS).1; // ASK ROB
+		time_print_elapsed(Cputime(T0):verbose:=verbose);
+		return v;
+	else
+		verbose := iterate_verbose(verbose);
+		q := 1;
+		found_primitive := false;
+		
+		T := get_time_print("Finding primitive eigenvalue":verbose:=verbose);
+		while not found_primitive do
+			q := NextPrime(q);
+			time_print("Checking q=" cat Sprint(q):verbose:=iterate_verbose(verbose));
+			eigens := SystemOfEigenvalues(MS,q); // Q FOR ROB: When this repeats, will it recalculate or is it cached somehow?
+								// ROB answer: it appears to be cached, at least when I run it twice the second time is super fast
+			aq := eigens[#eigens];
+			found_primitive := IsPrimitive(aq);
+		end while;
+		time_print_elapsed(Cputime(T):further_message:="found a_" cat Sprint(q),verbose:=verbose);
+		
+		T := get_time_print("Finding minimal polynomial Q(x) of a_" cat Sprint(q):verbose:=verbose);
+		P := MinimalPolynomial(aq);
+		K := Parent(aq);
+		PK := ChangeRing(P,K);
+		x := Parent(PK).1;
+		time_print_elapsed(Cputime(T):verbose:=verbose);		
+		
+		T := get_time_print("Forming the quotient polynomial R(x) := Q(x)/(x-a_" cat Sprint(q) cat ")":verbose:=verbose);
+		Q := PK div (x-aq);
+		time_print_elapsed(Cputime(T):verbose:=verbose);
+		
+		T := get_time_print("Computing matrix of T_" cat Sprint(q):verbose:=verbose);
+		Tq := DualHeckeOperator(MS,q);
+		time_print_elapsed(Cputime(T):verbose:=verbose);
+		
+		T:= get_time_print("Evaluating R(T_" cat Sprint(q) cat ")":verbose:=verbose);
+		QTq := Evaluate(Q,Tq);
+		time_print_elapsed(Cputime(T):verbose:=verbose);
+		
+		T := get_time_print("Performing projector":verbose:=verbose);
+		v := [K!1] cat [K!0 : j in [1..Dimension(MS)-1]];
+		v := Vector(v);
+		w := v*QTq;
+		MSK := BaseExtend(MS,K);
+		MSd := DualVectorSpace(MSK);
+		B := Basis(MSd);
+		f := w[1] * B[1];
+		for j in [2..Dimension(MS)] do
+			f := f+ w[j]*B[j];
+		end for;
+		time_print_elapsed(Cputime(T):verbose:=verbose);
+		verbose:=deiterate_verbose(verbose);
+		if scale then
+			f := f / f[1];   /// ASK ROB ABOUT THE SCALING
+		end if;
+		to_ret := f;
+		time_print_elapsed(Cputime(T0):verbose:=verbose);
+		return to_ret;
+	end if;
+end function;
+
+/* eta(MS,P,rat)
+
+Input:
+	MS: A Hecke simple space of modular symbols representing a Galois orbit of newforms.
+	P: An element of Sym<X,Y> with degree <= k-2.
+	rat: a rational number
+	
+Output:
+	ans: The value of MS on ... ASK ROB
+	magic_vector: the magic_vector (if it was computed in this process)
+		
+*/
+function eta(MS,P,rat:magic_vector:=-1,verbose:=false)
+	if Type(magic_vector) eq RngIntElt then
+		magic_vector := find_magic_vector(MS:verbose:=iterate_verbose(verbose));
+	end if;
+	ans := InnerProduct(magic_vector,modularpath(MS,P,rat)); //MS should probably be replaced by AmbientSpace(MS) but it doesn't seem to matter to Magma
+	return ans,magic_vector;
+end function;
+
+/******
+
+SECTION 2: L-values
+
+******/
+
+
+/* central_value(MS:twist:=1,precompute:=-1,magic_vec)
+
+Input:
+	MS: A Hecke simple space of modular symbols representing a Galois orbit of newforms.
+	
+Output:
+	Returns central value of the L-function (value at s = Weight(MS)/2) on representative given by the magic_vector.
+	
+Optional:
+	twist (default 1): integer limited to fundamental discriminant. Then, function returns central value of the
+		twisted L-function, with the twist coming from the corresponding quadratic character
+	magic_vector (default -1): if magic_vector is given, it uses that magic_vector
+	verbose: see io.magma
+	
+Note: The formula comes from Mazur-Tate-Teitelbaum (8.5).
+*/
+
+function central_value(MS:twist:=1,magic_vector:=-1,verbose:=false)
+	error if twist ne 1 and not IsFundamentalDiscriminant(twist), "You can only perform quadratic twists by fundamental discriminants";	
+	
+	if Type(magic_vector) eq RngIntElt then
+		magic_vector := find_magic_vector(MS:verbose:=verbose);
+	end if; 
+	
+	T := get_time_print("Computing central value (twist = " cat Sprint(twist) cat")":verbose:=verbose);
+	
+	k := Weight(MS);
+	g := k-2;
+	h := g div 2;
+	
+	D := AbsoluteValue(twist);
+	
+	ans := 0;
+	
+	for b in [1..D] do
+		if Gcd(D,b) eq 1 then
+			ans_b := 0;
+			a := -b mod D;
+			m := twist;
+			for j in [0..h] do
+				ans_b := ans_b + Binomial(h,j)*m^j*a^(h-j)*eta(MS,X^j*Y^(g-j),-a/m:magic_vector:=magic_vector,verbose:=verbose);
+			end for;
+			ans_b := KroneckerSymbol(twist,b)*ans_b;
+			ans := ans + ans_b;
+		end if;
+	end for;
+	
+	ans := twist^(-h)*ans;
+	
+	time_print_elapsed(Cputime(T):verbose:=verbose);
+	
+	return ans;
+end function;
+
+/* sign_of_FE(MS)
+
+Input:
+	MS: A Hecke simple space of modular symbols representing a Galois orbit of newforms.
+
+Output:
+	Returns the sign (+/-) of the functional equation of the completed L-function
+
+Options:
+	eigens (default: -1): if not -1, then a list corresponding to the eigensystem
+	force_new (default: true): force the space to be new. If you change to false, then you have to be *sure* that you are new before you call.
+	definite (default: true): If true, returns the definite sign. If false, returns a sign based on guessing.
+	num_tests (default 2): Only needed if definite eq false. Then num_tests tells you how many discriminants to test.
+	
+Comment: You need approximate if you don't work in square free level.
+
+Note: This really requires you to be at the right new level. 
+
+ASK ROB about the case where it is testing. Is it backwards? If KroneckerSymbol(D,-N) != 1 then w(f \otimes chi_D) = -w(f)...so if you get a non-zero value after twisting then probably you have sign -1 to start?
+
+ASK ROB...can't you twist to make the sign +1 if it is -1? Like, ...
+
+// For functional equation, you can use AtkinLehnerOperator(MS,N) where N := level(MS)
+
+*/
+/*
+function old_sign_of_FE(MS:eigens:=-1,definite:=true,num_tests:=2,magic_vector:=-1,verbose:=false)
+	T := get_time_print("Finding sign of functional equation":verbose:=verbose);
+	
+	error if Sign(MS) ne 1 and not definite, "Code only implemented for Sign(MS)=+1";
+	
+	N := Level(MS);
+	k := Weight(MS);
+	h := (k-2) div 2;
+	
+	if definite then
+		if not IsSquarefree(N) then
+			time_print("Exact FE is not implemented unless N is square free. We test values instead.":verbose:=iterate_verbose(verbose));
+			return sign_of_FE(MS:eigens:=eigens,definite:=false,num_tests:=num_tests,magic_vector:=magic_vector,verbose:=verbose);
+		end if;
+		
+		ps := PrimeDivisors(N);
+		maxp := Max(ps);
+		primes := PrimesUpTo(maxp);
+		
+		if (Type(eigens) eq RngIntElt) or (#primes gt #eigens) then
+			eigens := SystemOfEigenvalues(MS,maxp);			
+		end if;
+		
+		ALs := [-Sign(IntegerRing()!eigens[Position(primes,p)]) : p in ps];
+		ans := 1;
+		for w in ALs do
+			ans := ans * w;
+		end for;
+		time_print_elapsed(Cputime(T):verbose:=verbose);
+		return ans * (-1)^(k div 2);
+	else
+		if h mod 2 eq 0 then
+			Ds := [D : D in [1..100] | IsFundamentalDiscriminant(D) and KroneckerSymbol(D,-N) ne 1];
+		else
+			Ds := [-D : D in [1..100] | IsFundamentalDiscriminant(-D) and KroneckerSymbol(-D,-N) ne 1];
+		end if;			
+		Ds := [Ds[i] : i in [1..num_tests]];
+		for D in Ds do
+			if central_value(MS:twist:=D,magic_vector:=magic_vector) ne 0 then
+				time_print(">CPU Time elapsed " cat Sprint(Cputime(T)):verbose:=verbose);
+				return 1;  //found non-zero L-value
+			end if;
+		end for;
+		time_print(">CPU Time elapsed " cat Sprint(Cputime(T)):verbose:=verbose);
+		return -1;
+	end if;	
+end function;
+*/
+
+/* sign_of_FE(MS)
+
+Input:
+	MS: A Hecke simple space of modular symbols representing a Galois orbit of newforms of Gamma0(N)-level (some N).
+Output:
+	The sign of the functional equation
+	
+NOTE: This works only for Gamma0(N). The method calculates the W_N-eigenvalue, which is +/-.
+	Then, the sign of the functional equation is (-1)^(k/2)*(W_N-eigenvalue). 
+
+*/
+
+function sign_of_FE(MS)
+	N := Level(MS);
+	k := Weight(MS);
+	
+	WN := AtkinLehnerOperator(MS,N);
+	ID := IdentityMatrix(RationalField(),Dimension(MS));
+	
+	error_flag := false;
+	
+	if WN eq ID then
+		ans := 1;
+	elif WN eq -ID then
+		ans := -1;
+	else
+		error_flag := true;	
+	end if;
+	
+	error if error_flag, "WN is not +/-I";
+	
+	ans := (-1)^(k div 2)*ans;
+	return ans;
+	
+end function;
+
+/*get_ap(MS,p)
+
+Input:
+	MS: A Hecke simple space of modular symbols representing a Galois orbit of newforms of level Gamma0(Np) with (N,p)=1.
+	p: A prime number.
+	
+Output:
+	ap = +/- p^(k-2)/2.
+	
+Note: The only possibilities are +/- and they are distinguished in orbits. So, we really calculate the
+	second highest degree term of the p-th Hecke polynomial.
+	
+*/
+
+function get_ap(MS,p)
+	k := Weight(MS);
+	PTp := HeckePolynomial(MS,p);
+	sign_ap := -Sign(Coefficient(PTp,Degree(PTp)-1));
+	h := (k-2) div 2;
+	return sign_ap*p^h;
+end function;
+
+/*find_candidate_discriminants(tameN,p,sign_minus_one,sign_p,sign_tameN:num_candidates:=5)
+
+Input:
+	-tameN : an integer >= 1.
+	-p: a prime number.
+	-signs...
+
+Output:
+	A list of pairs <a,D> where a = EulerPhi(D) and such that (D|x) has specific signs for x = -1, p, and N.
+	The list is sorted by *increasing a*.
+*/
+
+function find_candidate_discriminants(tameN,p,sign_minus_one,sign_tameN,sign_p:num_candidates:=50)
+	num_found := 0;
+	D := sign_minus_one; // starts D at 1 or -1
+	candidates := [];
+	while num_found lt num_candidates do
+		if IsFundamentalDiscriminant(D) or (D eq 1) then
+			if (KroneckerSymbol(D,p) eq sign_p) and (KroneckerSymbol(D,tameN) eq sign_tameN) then
+				candidates := candidates cat [D];
+				num_found := num_found + 1;
+			end if;
+		end if;
+		D := D + sign_minus_one; // raises or lowers D
+	end while;
+	return Sort([<EulerPhi(AbsoluteValue(D)),D> : D in candidates]);
+end function;
+
+/*find_good_twist(MS,p)
+
+Input:
+	MS: A Hecke simple space of modular symbols representing a Galois orbit of newforms of level Gamma0(Np) with (N,p)=1.
+	p: A prime number.
+	
+Output:
+	Ouputs D,Lval where D such that MS \otimes (D|.) has non-vanishing central value Lval, and ap(MS\otimes (D|.)) is positive.
+	
+Options:
+	ap: +/- p^{(k-2)/2}
+	eigens: list of eigenvalues for MS
+	starting_twist: twist to start searching from
+	wf: Known sign of functional equation.
+
+*/
+
+function find_good_twist(MS,p:ap:=-1,eigens:=-1,starting_twist:=0,magic_vector:=-1,verbose:=false)
+	T := get_time_print("Searching for good twist with respect to p=" cat Sprint(p):verbose:=verbose);
+	
+	sign_space := Sign(MS);
+	//error if Level(MS) eq p and sign_space eq -1,"We cannot use -1-signed Modular Symbols at tame level 1";
+
+	k := Weight(MS); 
+	N := Level(MS);
+	
+	error if Valuation(N,p) ne 1, "Your level N=" cat Sprint(N) cat " has either none or more than two p=" cat Sprint(p) cat "in it";
+	
+	tameN := N div p;
+	
+	// First determine the value we need to make chi(-1)
+	r := (k-2) div 2;
+	sign_minus_one := sign_space*(-1)^r;
+	
+	//D := sign_minus_one*AbsoluteValue(starting_twist);	
+
+	// sign_ap is the sign we need to make chi(p)
+	
+	if Type(ap) eq RngIntElt then
+		ap := get_ap(MS,p);
+	end if;
+	sign_p := Sign(IntegerRing()!ap);
+	
+	// sign_N is the sign we need to make chi(N)
+	sign_FE := sign_of_FE(MS);
+	sign_tameN := sign_FE*sign_minus_one*sign_p;
+	
+	
+	// added because of some trivial nonsense that will form a block!
+	if IsSquare(tameN) and sign_tameN eq -1 then
+		return 0,0;
+	end if;
+	
+	cand_discs := find_candidate_discriminants(tameN,p,sign_minus_one,sign_tameN,sign_p);
+
+	found := false;
+	i := 1;
+	while not found do
+		D := cand_discs[i][2];
+		time_print("Candidate twist D=" cat Sprint(D):verbose:=iterate_verbose(verbose));
+		Lval := central_value(MS:twist:=D,magic_vector:=magic_vector,verbose:=iterate_verbose(verbose));
+		if Lval ne 0 then
+			time_print_elapsed(Cputime(T):verbose:=verbose);
+			return D,Lval;
+		end if; 
+	end while;
+	
+	/*
+	while not found do
+		D := D + sign_minus_one;
+		if (IsFundamentalDiscriminant(D) or D eq 1) then
+			if (KroneckerSymbol(D,p) eq sign_p) and (KroneckerSymbol(D,tameN) eq sign_tameN) then
+				time_print("Candidate twist D=" cat Sprint(D):verbose:=iterate_verbose(verbose));
+			 	Lval := central_value(MS:twist:=D,magic_vector:=magic_vector,verbose:=iterate_verbose(verbose));
+			 	if Lval ne 0 then
+			 		time_print_elapsed(Cputime(T):verbose:=verbose);
+			 		return D,Lval;
+			 	end if;
+			end if;
+		end if;
+	end while;
+	*/
+end function;
+
+/******
+
+SECTION 3: p-adic moments and p-adic L-derivative approximation
+
+load "Linv_new.magma";
+M := GetCuspidalModularSymbolsSpace(11,10);
+S := NewformDecomposition(M)[1];
+SS:= NewformDecomposition(M)[2];
+
+******/
+
+/* form_teich(p)
+
+Input:
+	- Prime number
+Ouput:
+	- Teichm\"uller representatives in Qp.
+*/
+function form_teich(p:prec:=20)
+	Qp:=pAdicRing(p,prec);
+	Poly<zz>:=PolynomialRing(Qp);   
+    
+	v:=Roots(zz^(p-1)-1);
+	Teich:=[Q!v[s][1] : s in [1..p-1]];
+	return Teich;
+end function;
+
+/* integrate_power(a,j,mu,teich)
+
+Input:
+ - a,j = integers
+ - mu = collection of moments of a p-adic distribution (p is known to mu)
+
+Ouput:
+ - int_{a+pZ_p} (<x> - 1)^j d\mu   (<x> is x/teich(x))
+ 
+*/
+function integrate_power(a,j,mu,teich)
+	ans :=0;
+
+	for r in [0..j] do
+		ans := ans + Binomial(j,r)*(-teich[a])^(j-r)*mu[a,r+1];
+	end for;
+
+	return teich[a]^(-j)*ans;
+end function;
+
+/* integrate_power2(a,j,mu)
+
+Version of prior function required when p = 2.
+
+*/
+function integrate_power2(a,j,mu)
+	ans :=0;
+
+	for r in [0..j] do
+		if a eq 1 then
+			b:=1;
+		else
+			b:=2;
+		end if;
+		ans := ans + Binomial(j,r)*(-a)^(j-r)*mu[b,r+1];
+	end for;
+
+	return a^(-j)*ans;
+end function;
+
+/* integrate_powerseries(P,i,teich,basic_ints)
+
+Input: 
+	- P: a power series in a variable y
+	- i: an integer
+	- teich: Teichm\"uller representations for a = 1, 2, ..., p-1
+	- basic_ints: the basic integrals int_{a+pZp} (<x>-1)^j mu
+	
+Ouput:
+	- The integral int_{Zp*} w(x)^i P(<x>-1) mu (w is the Teichmuller character)
+
+*/
+function integrate_powerseries(P,i,teich,basic_ints)
+	ans:=0;
+	for j in [0..NumberOfColumns(basic_ints)-1] do
+		for a in [1..#teich] do
+			temp:=basic_ints[a,j+1] * Coefficient(P,j) * teich[a]^i;
+			ans:=ans+temp;
+		end for;
+	end for;
+
+	return ans;
+end function;
+
+/* integrate_powerseries2
+
+Prior function for p = 2.
+
+*/
+function integrate_powerseries2(P,i,basic_ints)
+	ans:=0;
+	for j in [0..NumberOfColumns(basic_ints)-1] do
+		for a in [1,2] do
+			if a eq 1 then 
+				b := 1;
+			else 
+				b := -1;
+			end if;
+			temp:=basic_ints[a,j+1] * Coefficient(P,j) * b^i;
+			ans:=ans+temp;
+		end for;
+	end for;
+
+	return ans;
+end function;
+
+/* precompute_eta(MS,p:twist:=1,magic_vector:=-1,verbose:=false)
+
+Input:
+	MS: Hecke simple space of Modular Symbols
+	p: A prime number
+	
+Output:
+	For p odd, a matrix that is (|twist| * p) x (p-1) in dimension of the values of eta at certain... 
+	For p = 2, a matrix that is (|twist| * 4) x 2 in dimension of the values of eta at certain... 
+	
+Optional:
+	twist: The discriminant of a quadratic twist.
+	magic_vector: the magic vector for MS
+	verbose: see io.magma.
+
+// ASK ROB: Is the polynomial expansion slow?
+
+*/
+
+function precompute_eta(MS,p:twist:=1,magic_vector:=-1,teichs:=-1,verbose:=false)
+
+	k := Weight(MS);
+	D := AbsoluteValue(twist);
+	num_values := EulerPhi(D*p)*(k-1);
+	
+	T := get_time_print("Precomputing "  cat Sprint(num_values) cat " eta-values":verbose:=verbose);
+	
+	if Type(magic_vector) eq RngIntElt then
+		magic_vector := find_magic_vector(MS:verbose:=iterate_verbose(verbose));
+	end if;	
+
+	if p ne 2 then 
+		c_range := [1..D*p];
+		q := p;
+	else 
+		c_range := [1..4*D];
+		q := 4;
+	end if;
+		
+	K := BaseField(Parent(magic_vector));
+	ans := ZeroMatrix(K,D*q,k-1);
+	monom_ans := ZeroMatrix(K,D*q,k-1);
+	
+	if Type(teichs) eq RngIntElt then
+		teichs := form_teich(p);
+	end if;
+	
+	values_precomputed := 0;
+	twenty_percent := Floor(num_values div 5);	
+//ROB HACKING HERE
+	if twenty_percent eq 0 then
+		twenty_percent := 1;
+	end if;
+	
+	D_inv_modp := GF(p)!(1/D);
+	
+	verbose := iterate_verbose(verbose);
+	Ttemp := get_time_print("Finding monomial values at cusps":verbose:=verbose);
+	
+
+
+	// new code -- calculates only the monomial values we will need
+	for c in c_range do
+		if Gcd(c,D*p) eq 1 then
+			for m in [0..k-2] do
+				cc := IntegerRing()!(GF(p)!(c*D_inv_modp)); // ROB: cc isn't used here
+				monom_ans[c,m+1],magic_vector := eta(MS,X^m*Y^(k-2-m),-c/(D*q):magic_vector:=magic_vector);
+				values_precomputed := values_precomputed + 1;
+				if (values_precomputed mod twenty_percent) eq 0 then
+					percent := 20*(values_precomputed div twenty_percent);
+					time_print(Sprint(percent) cat "% computed (" cat Sprint(Cputime(Ttemp)) cat " so far)":verbose:=iterate_verbose(verbose));
+				end if;
+			end for;
+		end if;
+	end for;
+	// end new code
+	
+	time_print_elapsed(Cputime(Ttemp):verbose:=verbose);
+	
+	Ttemp := get_time_print("Compiling pre-computed eta answers":verbose:=verbose);
+	
+	for c in c_range do
+		if Gcd(c,D*p) eq 1 then
+			for j in [0..k-2] do
+				if p ne 2 then 
+					cc := IntegerRing()!(GF(p)!(c*D_inv_modp));
+					t := teichs[cc];
+				else
+					cc := IntegerRing(4)!(c/D);
+					if cc eq 1 then 
+						t := 1;
+					else
+						t := -1;
+					end if;
+				end if;
+				// new code
+				for m in [0..j] do
+					ans[c,j+1] := ans[c,j+1] + Binomial(j,m)*q^m*(c/D - t)^(j-m)*monom_ans[c,m+1];
+				end for;
+				// end new code
+			end for; 
+		end if;
+	end for;
+	time_print_elapsed(Cputime(Ttemp):verbose:=verbose);
+	
+	verbose:=deiterate_verbose(verbose);	
+	
+	time_print_elapsed(Cputime(T):verbose:=verbose);
+	return ans;
+end function;
+
+/*
+
+function old_precompute_eta(MS,p:twist:=1,magic_vector:=-1,teichs:=-1,verbose:=false)
+
+	k := Weight(MS);
+	D := AbsoluteValue(twist);
+	num_values := EulerPhi(D*p)*(k-1);
+	
+	T := get_time_print("Precomputing "  cat Sprint(num_values) cat " eta-values":verbose:=verbose);
+	
+	if Type(magic_vector) eq RngIntElt then
+		magic_vector := find_magic_vector(MS:verbose:=iterate_verbose(verbose));
+	end if;	
+		
+	K := BaseField(Parent(magic_vector));
+	ans := ZeroMatrix(K,D*p,k-1);
+	monom_ans := ZeroMatrix(K,D*p,k-1);
+	
+	if Type(teichs) eq RngIntElt and p ne 2 then
+		teichs := form_teich(p);
+	end if;
+	
+	values_precomputed := 0;
+	twenty_percent := Floor(num_values div 5);	
+	
+	D_inv_modp := GF(p)!(1/D);
+	
+	
+	for c in [1..D*p] do
+		if Gcd(c,D*p) eq 1 then
+			for j in [0..k-2] do
+				if p ne 2 then					
+					cc := IntegerRing()!(GF(p)!(c*D_inv_modp));
+					ans[c,j+1],magic_vector := eta(MS,(p*X + (c/D - teichs[cc])*Y)^j * Y^(k-2-j),-c/(D*p):magic_vector:=magic_vector); 
+				else 
+					cc := IntegerRing(4)!(c/D);
+					if cc eq 1 then
+						teich_sign := 1;
+					else 
+						teich_sign := -1;
+					end if;
+					ans[c,j+1],magic_vector := eta(MS,(p*X + (c/D - teich_sign)*Y)^j * Y^(k-2-j),-c/(D*p):magic_vector:=magic_vector); 
+				end if;
+				values_precomputed := values_precomputed + 1;
+				if (values_precomputed mod twenty_percent) eq 0 then
+					percent := 20*(values_precomputed div twenty_percent);
+					time_print(Sprint(percent) cat "% computed (" cat Sprint(Cputime(T)) cat " so far)":verbose:=iterate_verbose(verbose));
+				end if;
+			end for;
+		end if;
+	end for;	
+	
+	time_print_elapsed(Cputime(T):verbose:=verbose);
+	return ans;
+end function;
+*/
+
+
+/* precompute_basic_integrals(MS,p,ap:twist:=1,precomputed_eta:=-1,magic_vector:=-1,teichs:=-1)
+
+Input:
+	MS: Hecke simple Modular Symbols space
+	p: prime number
+	
+Output:
+	Matrix with (a,j+1)-value being int_{a+pZp} (x/omega(a)-1)^j d(mu_MS) for 1<=a<=p-1 and 0<=j<=k-2 when p is odd
+	For p=2, we return a 2 x k-1 matrix wih the
+	            (1,j+1)-value being int_{1+4Zp} (x-1)^j d(mu_MS) and the 
+		    (2,j+1)-value being int_{-1+4Zp} (-x-1)^j d(mu_MS) for 0<=j<=k-2
+Optional values:
+	ap: the eigenvalue of Up on MS
+	twist: a twist (replacing mu_MS with its twist)
+	precomputed_eta: output of eta-function above
+	magic_vector: magic_vector (only needed if precomputed_eta is -1)
+	teichs: fixed teichmuller representatives
+	verbose: see io.magma
+
+*/
+function precompute_basic_integrals(MS,p:ap:=0,twist:=1,precomputed_eta:=-1,magic_vector:=-1,teichs:=-1,verbose:=false);
+	T := get_time_print("Precomputing basic integrals":verbose:=verbose);	
+	if ap eq 0 then
+		ap := get_ap(MS,p);
+	end if;
+	
+	if Type(teichs) eq RngIntElt and p ne 2 then
+		teichs := form_teich(p);
+	end if;
+	
+	if Type(precomputed_eta) eq RngIntElt then
+		precomputed_eta := precompute_eta(MS,p:twist:=twist,magic_vector:=magic_vector,teichs:=teichs,verbose:=iterate_verbose(verbose));
+	end if;
+	K := BaseRing(Parent(precomputed_eta)); // ASK ROB or double check this. I just added it to make it clear.	
+	k := Weight(MS);	  
+	ans := ZeroMatrix(K,p,k-1); // ROB: why p here and not p-1 (though it makes p=2 work)
+	
+	D := AbsoluteValue(twist);
+	kr_symbs := [KroneckerSymbol(twist,b) : b in [1..D]];
+	
+	if p ne 2 then 
+		a_range := [1..p-1];
+		q := p;
+	else 
+		a_range := [1,2];
+		q := 4;
+	end if;
+
+	for a in a_range do
+		for j in [0..k-2] do // are the bounds right? Doesn't it make 1 <= j+1 <= k-1?
+			for b in [1..D] do
+				// when p = 2 when need to convert a from [1,2] to [1,-1] for computations but not for storage in the matrix
+				if p ne 2 or a eq 1 then 
+					aa := a;
+				else 
+					aa := -1;
+				end if;
+				i := (D*aa - q*b) mod (D*q);
+				ans[a,j+1] := ans[a,j+1] + kr_symbs[b] * precomputed_eta[i,j+1];
+			end for;
+			if p ne 2 then
+				ans[a,j+1] := ans[a,j+1] * teichs[a]^(-j) / ap;
+			else 
+				ans[a,j+1] := ans[a,j+1] * aa^(-j) / ap^2;
+			end if;			
+		end for;
+	end for;
+
+	time_print_elapsed(Cputime(T):verbose:=verbose);
+	return ans;
+end function;
+
+/* Lderiv_approx(MS,p)
+
+Input:
+	MS: A Hecke simple Modular Symbols space
+	p: A prime number
+Output:
+	An approximation to the L-derivative
+
+*/
+function Lderiv_approx(MS,p:ap:=0,twist:=1,precomputed_basic_ints:=-1,precomputed_eta:=-1,magic_vector:=-1,teichs:=-1,verbose:=false)
+	T := get_time_print("Forming L-derivative approximation":verbose:=verbose);
+	
+		
+	if Type(teichs) eq RngIntElt then
+		teichs := form_teich(p);
+	end if;
+	
+	if ap eq 0 then
+		ap := get_ap(MS,p);
+	end if;
+	
+	k := Weight(MS);
+	h :=(k-2) div 2;
+	
+	if Type(precomputed_basic_ints) eq RngIntElt then
+		precomputed_basic_ints := precompute_basic_integrals(MS,p:ap:=ap,twist:=twist,precomputed_eta:=precomputed_eta,magic_vector:=magic_vector,teichs:=teichs,verbose:=iterate_verbose(verbose));
+	end if;
+	
+	R<u>:=PowerSeriesRing(Q,k);
+	
+	f:=0;
+	
+	for j in [1..k-1] do
+		f:=f+(-1)^(j+1)/j*u^j; // ASK ROB: WHY GENERATE THIS ALL IF YOU ALSO DO THE NEXT STEP?
+	end for;
+	
+	f:=f*(u+1)^h;
+	
+	Ttemp := get_time_print("Integrating power series":verbose:=iterate_verbose(verbose));
+	if p ne 2 then
+		approx:=integrate_powerseries(f,h mod (p-1),teichs,precomputed_basic_ints);
+	else
+		approx:=integrate_powerseries2(f,h mod 2,precomputed_basic_ints);
+	end if;
+	time_print_elapsed(Cputime(Ttemp):verbose:=iterate_verbose(verbose));
+	time_print_elapsed(Cputime(T):verbose:=verbose);
+	return approx;
+end function;
+
+/******
+
+SECTION 4: Gather actual data
+
+load "Linv_new.magma";
+M := GetCuspidalModularSymbolsSpace(11,10);
+S := NewformDecomposition(M)[1];
+SS:= NewformDecomposition(M)[2];
+
+******/
+
+/*generator_values(MS:magic_vector:=-1,verbose:=false)
+
+Input:
+	-MS: A space of modular symbols
+Output:
+	-List of values on generators ...
+*/
+
+function generator_values(MS:magic_vector:=-1,verbose:=false)
+	N := Level(MS);
+	k := Weight(MS);
+	
+	T := get_time_print("Calculating modular symbols on generators":verbose:=verbose);
+	verbose:=iterate_verbose(verbose);
+	
+	if Type(magic_vector) eq RngIntElt then
+		magic_vector := find_magic_vector(MS:verbose:=iterate_verbose(verbose));
+	end if;
+	
+	Ttemp := get_time_print("Solving Manin relations":verbose:=verbose);
+	manin := solve_manin_relations(N);
+	gens := [manin[7][a] : a in manin[5]]; //returns matrices whose divisors span Deg^0(P^1(Q)) as a Gamma_0(N)-module
+	time_print_elapsed(Cputime(Ttemp):verbose:=verbose,further_message:=Sprint(#gens) cat " gens. found");
+	//time_print(">CPU time elapsed: " cat Sprint(Cputime(Ttemp)) cat " (" cat Sprint(#gens) cat " gens. found)":verbose:=verbose);
+	
+	vals := [];
+	Ttemp := get_time_print("Calculating modular symbols on generators":verbose:=verbose);
+	for A in gens do
+		if cc(A) ne 0 then
+			vals := vals cat [eta(MS,X^j*Y^(k-2-j),aa(A)/cc(A):magic_vector:=magic_vector) : j in [0..k-2]];
+		end if;
+		if dd(A) ne 0 then
+			vals := vals cat [eta(MS,X^j*Y^(k-2-j),bb(A)/dd(A):magic_vector:=magic_vector) : j in [0..k-2]];
+		end if;
+	end for; // ASK ROB. Do these periods go back into the of eta from before?
+	time_print_elapsed(Cputime(Ttemp):verbose:=verbose);
+	
+	verbose:=deiterate_verbose(verbose);
+	time_print_elapsed(Cputime(T):verbose:=verbose);
+	return vals;
+end function;
+
+
+/*period_correction(MS,pps)
+
+Input:
+	- MS: Space of Modular Symbols
+	- pps: list of a prime ideals in BaseField(SystemOfEigenvalues(MS))
+	
+Output:
+	- A list of integers that need to be used correction
+
+*/
+function period_correction(MS,pps:vals:=-1,magic_vector:=-1,verbose:=false)
+	T := get_time_print("Performing pp-by-pp period corrections":verbose:=verbose);
+	verbose:=iterate_verbose(verbose);
+	
+	if Type(vals) eq RngIntElt then
+		vals := generator_values(MS:magic_vector:=magic_vector,verbose:=verbose);
+	end if;
+	
+	ans := [-Min([abs_valuation(v,pp) : v in vals]) : pp in pps];
+	
+	verbose:=deiterate_verbose(verbose);
+	time_print_elapsed(Cputime(T):verbose:=verbose);
+	
+	return ans;
+end function;
+
+
+
+function Linv_data(MS,ps:teich_list:=-1,verbose:=false)
+	T := get_time_print("Calculating L-invariants":verbose:=verbose);
+	verbose:= iterate_verbose(verbose);	
+	
+	N := Level(MS);
+	k := Weight(MS);
+	
+	if Type(ps) eq RngIntElt then
+		ps := [ps];
+	end if;	
+	
+	if Type(teich_list) eq RngIntElt then
+		teich_list := [form_teich(p) : p in ps];
+	end if;
+
+	
+	magic_vector := find_magic_vector(MS:verbose:=verbose);
+	vals := generator_values(MS:magic_vector:=magic_vector,verbose:=verbose);
+	
+	ans := [* *];
+	
+	for i in [1..#ps] do
+		p := ps[i];
+		teichs := teich_list[i];
+		Tp := get_time_print("Working on p=" cat Sprint(p):verbose:=verbose);
+		verbose:=iterate_verbose(verbose);
+	
+		error if Valuation(N,p) ne 1, "Your level N=" cat Sprint(N) cat " has either none or more than two p=" cat Sprint(p) cat "in it";
+		
+		L,eigens,pps,rhobars := eigen_data(MS,p:verbose:=verbose);
+
+		mods := period_correction(MS,pps:vals:=vals,magic_vector:=magic_vector,verbose:=verbose);
+	
+		//ap := get_ap(MS,p);
+		//eigens[#eigens];
+	
+		p_index := #PrimesUpTo(p);
+		ap := eigens[p_index];
+		p_repeat := [p : pp in pps];
+		signs := [Sign(IntegerRing()!ap) : pp in pps];
+		epps := [ram_degree(pp) : pp in pps];
+		fpps := [inertia_degree(pp) : pp in pps];
+	
+		twist,Lval := find_good_twist(MS,p:ap:=ap,eigens:=eigens,
+											magic_vector:=magic_vector,verbose:=verbose);
+	
+		twists := [twist : pp in pps];
+											
+		// This is to deal with when a good twist is not possible to find
+		if twist eq 0 then
+			ans := ans cat [*<p_repeat,twists,signs,[9999 : pp in pps],[9999 : pp in pps],[9999 : pp in pps],rhobars,epps,fpps>*];
+		else				
+			precomputed_eta := precompute_eta(MS,p:twist:=twist,magic_vector:=magic_vector,teichs:=teichs,verbose:=verbose);
+			precomputed_basic_ints := precompute_basic_integrals(MS,p:ap:=ap,twist:=twist,precomputed_eta:=precomputed_eta,
+																			magic_vector:=magic_vector,teichs:=teichs,verbose:=verbose);
+																			
+	
+			Lprime := Lderiv_approx(MS,p:ap:=ap,twist:=twist,precomputed_basic_ints:=precomputed_basic_ints,precomputed_eta:=precomputed_eta,
+									magic_vector:=magic_vector,teichs:=teichs,verbose:=verbose);
+	
+	
+			sLprime := [abs_valuation(L!Lprime,pp) : pp in pps];
+			sLprime_mods := [sLprime[i] + mods[i] : i in [1..#sLprime]];
+			m := Max(sLprime_mods);
+			err_bnd := k/2 - Floor(Log(k-1)/Log(p));
+	
+			err_bound_fails := [i : i in [1..#sLprime_mods] | sLprime_mods[i] ge err_bnd];
+	
+			if #err_bound_fails gt 0 then
+				time_print("Warning: the error bound was not beaten uniformly!":verbose:=iterate_verbose(verbose));
+			end if;
+	
+			sLval := [abs_valuation(L!Lval,pp) : pp in pps];
+			sLval_mods := [sLval[i] + mods[i] : i in [1..#sLprime]];
+			sLinv := [sLprime[i]-sLval[i] : i in [1..#sLprime]];
+
+			for j in err_bound_fails do
+				sLprime_mods[j] := 9999;
+				sLinv[j] := 9999;
+			end for;	
+	
+			
+			ans := ans cat [*<p_repeat,twists,signs,sLinv,sLprime_mods,sLval_mods,rhobars,epps,fpps>*];
+		end if;
+		verbose:=deiterate_verbose(verbose);
+		time_print_elapsed(Cputime(Tp):verbose:=verbose);
+	end for;
+	
+	verbose := deiterate_verbose(verbose);
+	time_print_elapsed(Cputime(T):verbose:=verbose);
+	
+	return ans;
+end function;
+
+/* Linvs_by_level(N,p,k)
+
+Input:
+	N >= 1: An integer N >= 1
+	ps: A list of a prime numbers
+Output:
+	The Linv_data of each Galois orbit of newforms
+
+*/
+
+procedure Linvs_save_fixed_level_and_weight(N,ps,k:savefile:=true,filename:="",newforms:=false,bad_level:=-1,sign:=1,verbose:=false)
+	
+	if Type(ps) eq RngIntElt then
+		ps := [ps];
+	end if;	
+	ps := [p : p in ps | N mod p eq 0];
+	error if #ps eq 0, "None of the ps=" cat Sprint(ps) cat " divide N=" cat Sprint(N);
+	
+	if Type(bad_level) eq RngIntElt then
+		bad_level := [bad_level];
+	end if;
+	
+	if savefile and filename eq "" then
+		p_string := "";
+		for p in ps do
+			p_string := p_string cat "-" cat Sprint(p);
+		end for;
+		filename := "Linvs.N=" cat Sprint(N) cat ".ps=" cat Sprint(p_string) cat ".k=" cat Sprint(k) cat ".csv";
+	end if;
+	
+	T := get_time_print("Starting L-invariants in weight k=" cat Sprint(k) cat 
+								" and level N=" cat Sprint(N) cat 
+								" with ps=" cat Sprint(ps) cat
+								" (avoiding Ns=" cat Sprint(bad_level) cat
+								" )"
+								:verbose:=verbose);
+	verbose := iterate_verbose(verbose);	
+	
+	lines := [];
+	
+	teich_list := [];
+	
+	for p in ps do
+		teich_list := teich_list cat [form_teich(p)];
+	end for;
+	
+	
+	fs := eigenform_decomposition(N,k:newforms:=newforms,sign:=sign,verbose:=verbose);
+	fs := [f : f in fs | (#[p : p in ps | Level(f[2]) mod p eq 0] gt 0) and not (Level(f[2]) in bad_level)];
+	
+	for i in [1..#fs] do
+		LMFDB_label := fs[i][1];
+		Ttemp := get_time_print("Beginning Hecke simple piece #" cat Sprint(i) cat " of " cat Sprint(#fs) cat "(LMFDB=" cat Sprint(LMFDB_label) cat ")":verbose:=verbose);
+		verbose := iterate_verbose(verbose);
+		 		
+		MS := fs[i][2];
+		Nnew := Level(MS);
+		
+		valid_ps := [p : p in ps | Nnew mod p eq 0];
+		valid_teichs := [teich_list[Position(ps,p)] : p in valid_ps];
+		
+		all_p_data := Linv_data(MS,valid_ps:teich_list:=valid_teichs,verbose:=verbose);
+		
+		for i in [1..#valid_ps] do
+			p := valid_ps[i];
+			teichs := valid_teichs[i];
+			
+			p_data := all_p_data[i];
+			
+			num_data := #p_data[1];
+			
+			// dealing with case where no twist was found		 
+			for j in [1..num_data] do
+				line := Linv_csv_line(N,p,k,Nnew,LMFDB_label,p_data[2][j],p_data[3][j],p_data[4][j],p_data[5][j],p_data[6][j],p_data[7][j],p_data[8][j],p_data[9][j]); 
+				if savefile then				
+					Write(filename,line);
+				else
+					lines := lines cat [line];
+				end if;
+			end for;
+		end for;		
+		verbose := deiterate_verbose(verbose);	
+		time_print_elapsed(Cputime(Ttemp):verbose:=verbose);
+		/*
+		for p in valid_ps do
+			verbose := iterate_verbose(verbose);
+			TTemp := get_time_print("Starting working on p=" cat Sprint(p):verbose:=verbose);
+			teichs := teich_list[Position(ps,p)];
+			twists,signs,sLinvs,sLprimes,sLvals,rhobars,epps,fpps := Linv_data(MS,p:teichs:=teichs,verbose:=verbose);
+			
+			// dealing with case where no twist was found		 
+			for j in [1..#twists] do
+				line := Linv_csv_line(N,p,k,Nnew,LMFDB_label,twists[j],signs[j],sLinvs[j],sLprimes[j],sLvals[j],rhobars[j],epps[j],fpps[j]); 
+				if savefile then				
+					Write(filename,line);
+				else
+					lines := lines cat [line];
+				end if;
+			end for;
+			time_print_elapsed(Cputime(Ttemp):verbose:=verbose);
+			verbose:= deiterate_verbose(verbose);
+		end for;
+		*/
+		//time_print_elapsed(Cputime(Ttemp):verbose:=verbose);
+	end for;
+	
+	verbose:=deiterate_verbose(verbose);
+	time_print_elapsed(Cputime(T):verbose:=verbose);	
+	
+	if not savefile then
+		for line in lines do
+			print(line);
+		end for;
+	end if;
+end procedure;
+
+procedure Linvs_save_fixed_level_many_weights(N,ps,kmin,kmax:step:=2,savefile:=true,logfile:=true,filename:="",filepath:="",bad_level:=-1,newforms:=false,sign:=1,verbose:=false)
+		if Type(ps) eq RngIntElt then
+			ps := [ps];
+		end if;	
+		ps := [p : p in ps | N mod p eq 0];
+		error if #ps eq 0, "None of the ps=" cat Sprint(ps) cat " divide N=" cat Sprint(N);
+	
+		// first set up csv files
+		if (savefile and filename eq "") or (not savefile) then
+			p_string := "";
+			for p in ps do
+				p_string := p_string cat "-" cat Sprint(p);
+			end for;
+			filename := "Linvs.N=" cat Sprint(N) 
+										cat ".ps=" cat Sprint(p_string) 
+										cat ".kmin=" cat Sprint(kmin)
+										cat ".kmax=" cat Sprint(kmax)
+										cat ".step=" cat Sprint(2) 
+										cat ".csv";
+			if filepath ne "" then
+				filename := filepath cat filename;
+			end if;
+		end if;
+		
+		if savefile then
+			header_line := "N,p,k,Nnew,LMFDB_label,twist,ap_sign,sLinv,sLderiv,sLval,rhobar,epp,fpp";			
+			F := Open(filename, "a+");
+			F := Open(filename, "r+");
+			if IsEof(Gets(F)) then
+				Write(filename,header_line);
+			end if;
+		end if;		
+		
+		if logfile then
+			log_filename := filename cat "." cat Sprint(kmin) cat "-" cat Sprint(kmax) cat "_by_" cat Sprint(step) cat ".log";
+			SetLogFile(log_filename);
+			verbose := 0;
+		end if;
+		
+		for k in [kmin..kmax by step] do 
+			Linvs_save_fixed_level_and_weight(N,ps,k:savefile:=savefile,filename:=filename,newforms:=newforms,bad_level:=bad_level,sign:=sign,verbose:=verbose);
+		end for;
+		
+		if logfile then
+			UnsetLogFile();
+		end if;
+		
+		
+end procedure;
+
+

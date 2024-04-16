@@ -1,0 +1,4 @@
+Z:=Integers();
+Q:=Rationals();
+GLQ:=GL(2,Q);
+ZGLQ:=GroupAlgebra(Z,GLQ);

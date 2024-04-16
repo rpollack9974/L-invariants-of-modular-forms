@@ -1,0 +1,218 @@
+// Stupid MAGAM puts in artificial lines breaks!
+
+SetColumns(0);
+SetAutoColumns(false);
+
+// INPUT/OUTPUT COMMANDS
+
+// CONVENTION:
+// verbose is either *false* or a number 0, 1, 2, ... that indicates how "deep" to offset the printout
+
+/* get_time_print(s)
+
+Input:
+	- verbose: an integer -1, 0, 1, ... 
+	- A string s
+Output:
+	- If verbose >= 0, prints out the sprint (with a timestamp and offset from verbose)
+		and then it returns the current CPU time. Otherwise it returns simply -1.
+	
+*/
+function get_time_print(s:verbose:=false)
+	if Type(verbose) eq RngIntElt then
+		verbose := Max([verbose,0]);
+		offset := "."^verbose;
+		date_format := "date +\"%F %H:%M:%S\"";
+		time_str := Pipe(date_format,"");
+		time_str := Substring(time_str,1,#time_str-1); // removes a newline
+		print(time_str cat " " cat offset cat s);
+		return Cputime();
+	else 
+		return -1;
+	end if;	
+end function;
+
+/* time_print(s)
+
+Like get_time_print, except it does not return the time.
+
+*/
+
+procedure time_print(s:verbose:=false)
+	if Type(verbose) eq RngIntElt then
+		verbose := Max([verbose,0]);
+		offset := "."^verbose;
+		date_format := "date +\"%F %H:%M:%S\"";
+		time_str := Pipe(date_format,"");
+		time_str := Substring(time_str,1,#time_str-1); // removes a newline
+		print(time_str cat " " cat offset cat s);
+	end if;
+end procedure;
+
+/* time_print_elapsed(cputime:further_message:="",verbose:=false)
+
+Input:
+	cputime: a real-time measurement
+Output:
+	String ">CPU Time Elapsed: " and then the cputime...and then (further_message)
+
+*/
+
+procedure time_print_elapsed(cputime:further_message:="",verbose:=false)
+	s := ">CPU Time Elapsed: " cat Sprint(cputime);
+	if further_message ne "" then
+		s := s cat " (" cat further_message cat ")"; 
+	end if;	
+	time_print(s:verbose:=verbose);
+end procedure;
+
+/* iterate_verbose(verbose)
+
+Input:
+	verbose
+Output:
+	If verbose is false, then return false. Otherwise, return verbose + 1.
+	
+*/
+
+function iterate_verbose(verbose)
+	if Type(verbose) eq RngIntElt then
+		return verbose + 1;
+	else
+		return verbose;
+	end if;
+end function;
+
+/* iterate_verbose(verbose)
+
+Input:
+	verbose
+Output:
+	If verbose is false, then return false. Otherwise, return verbose - 1.
+	
+*/
+
+function deiterate_verbose(verbose)
+	if Type(verbose) eq RngIntElt then
+		return verbose - 1;
+	else
+		return verbose;
+	end if;
+end function;
+
+/* polynomial_to_string(f)
+
+Input:
+	f: A *Integer* polynomial aX^n + bX^{n-1} + ... + c
+Output:
+	The string [a:b:...:c]
+
+*/
+
+function polynomial_to_string(f);
+	v := Reverse(Coefficients(f));
+	st := "[";
+	for i in [1..#v-1] do
+		st := st cat IntegerToString(IntegerRing()!v[i]) cat ":";
+	end for;
+	st := st cat IntegerToString(IntegerRing()!v[#v]) cat "]";
+	return st;
+end function;
+
+/* rhobar_to_string(rb)
+
+Input:
+	rb: the list a characteristic polynomials of Frobenius for a Galois representation rb
+Output:
+	A string representing this list
+	
+Option:
+	human_readable = "false" returns a compact string representing polynomials, like returns above.
+	 						If "true" then it returns something like
+								"a2 = 7, a3 = 4, ..."
+							where a human can easily read it.
+
+*/
+function rhobar_to_string(rb:human_readable:=false,sturm:=-1)
+	S := "";
+	//error if n_terms gt #rb, "not enough Fourier coefficients";
+
+	if sturm le 0 then
+		sturm := rb[#rb][1];
+	end if;
+
+	q := rb[1][1];
+	i := 1;
+	while (q le sturm) and (i le #rb) do
+		q := rb[i][1];
+		aq := rb[i][2];
+		if Degree(aq) eq 1 and human_readable then
+			aq := Roots(aq)[1][1];
+		end if;
+		if human_readable then
+			S := S cat Sprintf("a_%o=%o",q,aq);
+		else
+			S := S cat Sprintf("%o:%o",q,polynomial_to_string(aq));
+		end if;
+		if (i lt #rb) and (NextPrime(rb[i][1]) le sturm) then
+			if human_readable then
+				S := S cat ", ";
+			else
+				S := S cat ";";
+			end if;
+		end if;
+		i := i + 1;
+		if i le #rb then
+			q := rb[i][1];
+		end if;
+	end while;
+	return S;
+end function;
+
+/*rhobar_csv_line(rhobar,N,LMFDB_label,twist)
+
+Input:
+	-N: integer >= 1 (ambient level)
+	-k: weight k >= 2
+	-rhobar: is a triple <Nnew,LMFDB_label,rhobar> where
+		-Nnew: integer N >= 1.
+		-LMFDB_label: eigenform LMFDB label
+		-rhobar: rhobar-eigensystem
+
+*/
+
+function rhobar_csv_line(N,p,k,Nnew,LMFDB_label,rhobar,alpha,twist,global_red,local_red)
+	rhobar := rhobar_to_string(rhobar);
+	alpha := rhobar_to_string(alpha);
+	
+	to_ret := Sprint(N) cat ","
+						cat Sprint(p) cat "," 
+						cat Sprint(k) cat ","
+						cat Sprint(Nnew) cat ","
+						cat Sprint(LMFDB_label) cat ","
+						cat Sprint(rhobar) cat ","
+						cat Sprint(alpha) cat ","
+						cat Sprint(twist) cat ","
+						cat Sprint(global_red) cat ","
+						cat Sprint(local_red);
+	return to_ret;
+end function;
+
+function Linv_csv_line(N,p,k,Nnew,LMFDB_label,twist,sign,sLinv,sLderiv,sLval,rhobar,epp,fpp)
+	rhobar := rhobar_to_string(rhobar);
+	
+	to_ret := Sprint(N) cat ","
+					cat Sprint(p) cat ","
+					cat Sprint(k) cat ","
+					cat Sprint(Nnew) cat ","
+					cat Sprint(LMFDB_label) cat ","
+					cat Sprint(twist) cat ","
+					cat Sprint(sign) cat ","
+					cat Sprint(sLinv) cat ","
+					cat Sprint(sLderiv) cat ","
+					cat Sprint(sLval) cat ","
+					cat Sprint(rhobar) cat ","
+					cat Sprint(epp) cat ","
+					cat Sprint(fpp);
+	return to_ret;
+end function;

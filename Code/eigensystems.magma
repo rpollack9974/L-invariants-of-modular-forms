@@ -1,0 +1,608 @@
+/*
+Code swallowed from rhobar_slopes_beta.magma
+*/
+
+load "io.magma";
+
+
+/* SturmBound(N,k)
+
+Input:
+	-N: An integer >= 1.
+	-k: An integer >= 2.
+Output:
+	The sturm bound for weight k cuspforms at level N.
+
+*/
+
+function SturmBound(N,k)
+	index := N;
+	for q in PrimeDivisors(N) do
+		index := index * (1 + 1/q);
+	end for;
+
+	return Floor(index * k / 12);
+end function;
+
+/* MaxSturmBound(N,p)
+
+Input:
+	-N: An integer >= 1.
+	-p: A prime number.
+Output:
+	The maximum Sturm bound for weights 2 <= k <= p^2. (Want congruences modulo p... can assume p is prime to N?)
+
+Note: MaxSturmBound(N,p) >= p.
+*/
+
+function MaxSturmBound(N,p)
+	while N mod p eq 0 do
+		N := N div p;
+	end while;
+	m := Max(SturmBound(N,p^2),NextPrime(p)); // ASK ROB. I think this works if N has a p in it already. But I'm not sure.
+	bool := false;
+	q := 2;
+	while q lt m and not bool do 
+		if GCD(N*p,q) eq 1 then
+			bool := true;
+		end if;
+		q := NextPrime(q);
+	end while;
+
+	if bool then
+		return m;
+	else
+		q := NextPrime(m);
+		while GCD(N*p,q) ne 1 do 
+			q := NextPrime(q);
+		end while;
+		return q+1;
+	end if;
+end function;
+
+/* GetModularSymbolsSpace(N,k:cuspidal:=false,neben=-1,newforms:=false,sign:=1)
+
+Input:
+	N: an integer level
+	k: an non-negative integer weight
+	
+Output:
+	A space of ModularSymbols
+	
+Optional:
+	neben: A GrpDrchElt, then you get Gamma1(N) with that character
+	newforms (default false): true gives you only newforms.
+	sign (default 1): sign of modular symbol space
+*/
+function GetCuspidalModularSymbolsSpace(N,k:neben:=-1,newforms:=false,sign:=1)
+	if Type(neben) ne GrpDrchElt then
+		M := ModularSymbols(N,k,sign);
+	else
+		G := DirichletGroup(N);
+		M := ModularSymbols(G!neben,k,sign);
+	end if;
+	M := CuspidalSubspace(M);
+	if newforms then
+		M := NewSubspace(M);
+	end if;
+
+	return M;
+end function;
+
+
+
+// LMFDB LABELS
+
+function trace(f,prec:MF:=false)
+	if not MF then
+		f := qEigenform(f,prec+1);
+	end if;
+	return [Trace(Coefficient(f,i)) : i in [1..prec]];
+
+end function;
+
+function is_all_distinct(list)
+	return #Set(list) eq #list;
+end function;
+
+
+alph := ["a","b","c","d","e","f","g","h","i","j","k","l","m","n","o","p","q","r","s","t","u","v","w","x","y","z"];
+
+//returns the list of digits of k base n
+function digits_base_n(k,n)
+	if k lt n then
+		return [k];
+	else
+		return digits_base_n(k div n,n) cat [k mod n];
+	end if;
+end function;
+
+function number_to_letters(k,alph)
+	v := digits_base_n(k,26);
+	//replace all n0... occurences with (n-1)26 --- this is a Z and 0 problem
+	for i in [#v..2 by -1] do
+		if v[i] eq 0 then
+			v[i] := v[i] + 26;
+			v[i-1] := v[i-1] - 1;
+		end if;
+	end for;
+
+	while v[1] eq 0 do
+		v := [v[i] : i in [2..#v]];
+	end while;
+
+	ans := "";
+
+	for i in [1..#v] do
+		ans := ans cat alph[v[i]];
+	end for;
+
+	return ans;
+end function;
+
+
+//takes in a complete list of newforms of a fixed weight and level
+// and returns a list of their LMFDB labels
+function LMFDB_labels_fixed_level(list:MF:=false)
+	if #list eq 0 then
+		return [];
+	end if;
+	labels := [];
+	prec := 1;
+	done := false;
+	while not done do
+		traces := [trace(f,prec:MF:=MF) : f in list];
+		if is_all_distinct(traces) then
+			done := true;
+		else
+			prec := prec + 1;
+		end if;
+	end while;
+
+	sorted_traces := Sort(traces);
+
+	N := Level(list[1]);
+	k := Weight(list[1]);
+	return [IntegerToString(N) cat "." cat IntegerToString(k) cat ".a." cat number_to_letters(Position(sorted_traces,t),alph) : t in traces];
+end function;
+
+/* eigenform_decomposition(N,k)
+
+Input:
+	-N: An integer >= 1.
+	-k: An integer >= 2.
+	
+Output:
+	List of pairs <s,fs> where 
+			- s is an LMFDB label
+			- fs is a Galois orbit, seen at its *new* level.
+
+*/
+
+function eigenform_decomposition(N,k:neben:=-1,newforms:=false,sign:=1,verbose:=false)
+	T := get_time_print("Performing eigenform decomposition":verbose:=verbose);
+	MS := GetCuspidalModularSymbolsSpace(N,k:neben:=neben,newforms:=newforms,sign:=sign);
+	fs := NewformDecomposition(MS);
+	time_print(">CPU Time elapsed: " cat Sprint(Cputime(T)) cat " (" cat Sprint(#fs) cat " Galois orbits found)":verbose:=verbose);
+	
+	T := get_time_print("Sorting into newform levels":verbose:=verbose);
+	new_levels := [];
+	fs_by_levels := [];
+	
+	for i in [1..#fs] do
+		fnew := AssociatedNewSpace(fs[i]);
+		Nnew := Level(fnew);
+		if Nnew notin new_levels then
+			new_levels := new_levels cat [Nnew];
+			fs_by_levels := fs_by_levels cat [<Nnew,[fnew]>];
+		else
+			fs_by_levels[Position(new_levels,Nnew)][2] := fs_by_levels[Position(new_levels,Nnew)][2] cat [fnew];
+		end if;
+	end for;
+	time_print_elapsed(Cputime(T):verbose:=verbose);
+		
+	
+	T := get_time_print("Generating LMFDB labels":verbose:=verbose);
+	to_ret := [];
+	for i in [1..#new_levels] do
+		fs_new := fs_by_levels[i][2];
+		labels := LMFDB_labels_fixed_level(fs_by_levels[i][2]);
+		to_ret := to_ret cat [<labels[i],fs_new[i]> : i in [1..#fs_new]];
+	end for;
+	time_print_elapsed(Cputime(T):verbose:=verbose);	
+	return to_ret;
+end function;
+
+/* reduction_eigenvalue(L,aell,pp)
+
+*/ 
+
+function reduction_eigenvalue(L,aell,pp)
+	//bug in montify I think where the ground field is messed up and so 
+			//minimal polynoimals are not computed over F_p
+			//
+			//I've hacked together a possible fix here as it seems that taking the
+			//minimal polynomial over whatever ground field appears, taking a root
+			//of that polynomial and then taking min poly again seems to work
+	p := PrimeBelow(pp);
+	aellbar := Reduction(L!aell,pp);
+	F := Parent(Reduction(L!aell,pp));
+	if #F ne p then
+		t := Degree(F);
+		FF := GF(p^t);
+		Embed(F,FF);
+		aellbar := FF!aellbar;
+	end if;
+	return MinimalPolynomial(aellbar);
+end function;
+
+/* reduction_of_eigensystem(eigens,pp,N,p_bound)
+
+Input:
+	-eigens: a list of eigenvalues for Hecke operators, lying in a number field (L in the code)
+	-pp: a prime ideal of that number field
+	-N: an integer co-prime to p giving the tame level
+	
+Output:
+	The values of the eigensystem modulo the prime pp.
+	
+Optional:
+	-p_bound: bound up to which we should calculate the eigensystem. If -1 (default) then it is reset to the size of the eigensystem
+
+*/
+function reduction_of_eigensystem(eigens,pp,N:p_bound:=-1)
+	L := Parent(eigens[1]);
+	p := PrimeBelow(pp);
+	aells := [];
+	aps := [];
+	
+	if p_bound eq -1 then
+		primes := PrimesUpTo(Max([NthPrime(#eigens),p]));
+	else 
+		primes := PrimesUpTo(Max([p_bound,p]));
+	end if;
+	
+	error if #primes gt #eigens, "You are asking for too many primes. Get more eigenvalues";
+	p_ind := 1;
+	for i in [1..#primes] do
+		ell := primes[i];
+		aell := eigens[i];
+		if Gcd(ell,N*p) eq 1 then
+			aells := aells cat [<ell,reduction_eigenvalue(L,aell,pp)>];
+		elif (ell eq p) then
+			p_ind := i; // save the index of p
+		end if;	
+	end for;
+	
+	ap := reduction_eigenvalue(L,eigens[p_ind],pp);
+	aps := aps cat [<p,ap>];
+	
+	return aells,aps;
+end function;
+
+/* eigen_data(MS,p)
+
+Input:
+	-MS: A Hecke simple modular symbols space.
+	-p: A prime number p.
+Output:
+	Four objects: a number field L,
+						a list of eigenvalues of Hecke operators acting on MS
+						a list of primes pp above the rational prime p
+						the reduction modulo pp of the eigensystem (for each pp)
+
+Optional:
+	eigen_bound (default - 1): a bound up to which to calculate the eigensystem
+	force_true (default: true)): for the space of MS to be newforms (don't turn off unless you are sure)
+	verbose: verbose
+
+*/
+
+function eigen_data(MS,p:eigen_bound:=-1,verbose:=false)
+	T := get_time_print("Gathering eigensystem data":verbose:=verbose);
+	N := Level(MS);
+	
+	if eigen_bound eq -1 then
+		eigen_bound := MaxSturmBound(N,p);
+	end if;
+	
+	verbose:= iterate_verbose(verbose);
+	
+	Ttemp := get_time_print("Calculating system of eigenvalues":verbose:=verbose);
+	eigens := SystemOfEigenvalues(MS,eigen_bound); // ASK ROB WHY ONLY UP TO p
+	time_print_elapsed(Cputime(Ttemp):verbose:=verbose);
+	
+	K := Parent(eigens[1]);
+	L := Montify(K);
+	eigens := [L!eigens[a] : a in [1..#eigens]];
+	
+	Ttemp := get_time_print("Factoring p":verbose:=verbose);
+	pps := PrimesOver(L,p);
+	time_print(">Cpu time elapsed: " cat Sprint(Cputime(Ttemp)):verbose:=verbose);
+	
+	Ttemp := get_time_print("Calculating reductions of eigensystem":verbose:=verbose);
+	rhobars := [];
+	aps := [];	
+	for pp in pps do
+		rhobar,ap := reduction_of_eigensystem(eigens,pp,N);
+		rhobars := rhobars cat [rhobar];
+		aps := aps cat [ap];
+	end for;
+	time_print_elapsed(Cputime(Ttemp):verbose:=verbose);
+	
+	verbose:= deiterate_verbose(verbose);
+	
+	time_print_elapsed(Cputime(T):verbose:=verbose,further_message:= Sprint(#pps) cat " pps found");
+	return L,eigens,pps,rhobars,aps;
+end function;
+
+/* rhobars_fixed_level_and_weight(N,k,p)
+
+Input:
+	-N: Integer N >= 1.
+	-k: Weight k >= 2.
+	-p: Prime number p.
+Output:
+	List of vectors <N,k,LMFDB,rhobar> where M is the level of a newform of level N and rhobar is a rhobar at that level.
+
+*/
+
+function cuspidal_rhobars_fixed_level_and_weight(N,k,p:neben:=-1,newforms:=false,sign:=1,verbose:=false)
+	T := get_time_print("Collecting " cat Sprint(p) cat "-adic cuspidal rhobars level N=" cat Sprint(N) cat " and weight k=" cat Sprint(k):verbose:=verbose);	
+	verbose := iterate_verbose(verbose);
+	
+	fs := eigenform_decomposition(N,k:neben:=neben,newforms:=newforms,sign:=sign,verbose:=verbose);
+	
+	rhobar_list := [];
+	ap_list := [];
+	for i in [1..#fs] do
+		Ttemp := get_time_print("Working Galois orbit #" cat Sprint(i) cat " of " cat Sprint(#fs):verbose:=verbose);
+		f := fs[i][2];
+		LMFDB_f := fs[i][1];
+		L,eigens,pp,rhobars,aps := eigen_data(f,p:eigen_bound:=MaxSturmBound(N,p),verbose:=iterate_verbose(verbose)); // note: want to calculate up to sturm at level N still.
+		for i in [1..#rhobars] do
+			rhobars[i] := [x : x in rhobars[i] | Gcd(N*p,x[1]) eq 1];
+		end for;
+		rhobar_list := rhobar_list cat [<Level(f),k,LMFDB_f,rhobars,aps>];
+		time_print_elapsed(Cputime(Ttemp):verbose:=verbose);
+	end for;
+	
+	verbose := deiterate_verbose(verbose);
+	time_print_elapsed(Cputime(T):verbose:=verbose);
+	return rhobar_list;
+end function;
+
+/* rhobars_fixed_level_and_weight(N,k,p)
+
+Input:
+	-N: Integer N >= 1.
+	-k: Weight k >= 2.
+	-p: Prime number p.
+Output:
+	Lists <1,k,LMFDB,rhobar> for the Eisenstein rhobars.
+
+*/
+
+function eisenstein_rhobars_fixed_level_and_weight(N,k,p:neben:=-1,newforms:=false,sign:=1,verbose:=false)
+	error if neben ne -1, "Nebentype not implented";
+	error if not IsSquarefree(N), "Square-free level not implemented";
+
+	T := get_time_print("Determining " cat Sprint(p)cat "-adic Eisenstein rhobars level N=" cat Sprint(N) cat " and weight k=" cat Sprint(k):verbose:=verbose);
+
+	Nnew := 1;
+	LMFDB := "1.Eis." cat Sprint(k);
+	
+
+	sturm := MaxSturmBound(N,p);
+	
+	rhobar := [<q,MinimalPolynomial(GF(p)!(q^(k-1)+1))> : q in [1..sturm] | IsPrime(q) and Gcd(q,N*p) eq 1];
+	
+	
+	time_print_elapsed(Cputime(T):verbose:=verbose);
+	
+	return [<1,k,LMFDB,[rhobar],[[<p,MinimalPolynomial(GF(p)!(1))>]]>];
+end function;
+
+/* twist(rb,p,t)
+
+*/
+
+function twist(rhobar,p,t)
+	v := [];
+	for a in [1..#rhobar] do
+		ell := rhobar[a][1];
+		pow := (GF(p)!ell)^(-t);
+		f := rhobar[a][2];
+		R := Parent(f);
+		y := R.1;
+		f := Evaluate(f,pow * y);
+		f := f / LeadingCoefficient(f);
+		v := v cat [<ell,f>];
+	end for;
+	return v;
+end function;
+
+/* unique_twists(rhobar,p)
+
+	Input:
+		-rhobar: rhobar a list of Frobenius minimal polynoimals
+		-p: a prime number
+	Output:
+		-A list [<t,rhobar_t>] where rhobar_t is the twist by omega^t. But, we take only the unique ones, with smallest t.
+*/
+
+function unique_twists(rhobar,p)
+	all_twists := [twist(rhobar,p,t) : t in [0..p-2]];
+	uniq := Set(all_twists);
+	return Sort([<Position(all_twists,rhobar)-1,rhobar> : rhobar in uniq]);
+end function;
+
+/* generate_all_rhobars(low_weight_rhobars)
+
+Input:
+	-low_weights_rhobars = list of low weight rhobars <Nnew,k,LMFDB,rhobar>
+Output:
+	- the same list with any duplicate rhobars removed.
+	
+Convention: We keep *all* the Eisenstein examples that we can. After that, we keep the lowest weight examples. So, the lists need to come to us
+with Eisenstein series first, and then by weight.
+
+Output: <x[1],...,x[8]> where
+
+x[1] = New level
+x[2] = Weight
+x[3] = LMFDB label
+x[4] = rhobar
+x[5] = rhobar at p
+x[6] = twist (used from twist 0 case)
+x[7] = global reduction type
+x[8] = local reduction type
+
+*/
+
+function generate_all_rhobars(low_weight_eisenstein,low_weight_cuspidal,p)
+	
+	
+	eis_rhobars_found := [];
+	data_found := [];
+
+	// first add in the Eisenstein series and all their twists
+	
+	for x in low_weight_eisenstein do
+		for i in [1..#x[4]] do
+			rhobar := x[4][i];
+			if rhobar notin eis_rhobars_found then
+				rhobar_twists := unique_twists(rhobar,p);
+				for rb_twist in rhobar_twists do
+					eis_rhobars_found := eis_rhobars_found cat [rb_twist[2]];
+					if x[2] eq 2 then
+						eis_type := "E2";
+					else
+						eis_type := "Eis";
+					end if;
+					data_found := data_found cat [ <x[1],x[2],x[3],rb_twist[2],x[5][i],rb_twist[1],eis_type,"Split"> ];
+				end for;
+			end if;
+		end for;
+	end for;
+	
+	rhobars_found := eis_rhobars_found;
+	
+	// now we go through the cuspidals.
+	
+	all_cuspidal_rhobars_low_wt := [];
+	for x in low_weight_cuspidal do
+		for i in [1..#x[4]] do
+			all_cuspidal_rhobars_low_wt := all_cuspidal_rhobars_low_wt cat [x[4][i]];
+		end for;
+	end for;
+	
+	for x in low_weight_cuspidal do	
+		for i in [1..#x[4]] do
+			rhobar := x[4][i];
+			if rhobar notin rhobars_found then // if this rhobar is new to use (in particular, non-eisenstein!)
+				rhobar_twists := unique_twists(rhobar,p);
+				companion := (#rhobar_twists lt (p-1)) or (#[x : x in rhobar_twists | x[2] in all_cuspidal_rhobars_low_wt] gt 1);
+				if Coefficients(x[5][i][1][2])[1] eq 0 then
+					red_type := "Irred.";
+				elif companion then 
+					red_type := "Split";
+				elif x[2] eq (p+1) then
+					red_type := "Tres ramifee";
+				else
+					red_type := "Non-split generic";
+				end if;				
+				
+				for rb_twist in rhobar_twists do
+					rhobars_found := rhobars_found cat [rb_twist[2]];
+					data_found := data_found cat [ <x[1],x[2],x[3],rb_twist[2],x[5][i],rb_twist[1],"Irred",red_type> ];
+				end for;
+			end if;
+		end for;
+	end for;
+	
+	return data_found;
+end function;
+
+/* rhobars_fixed_level(N,p)
+
+Input:
+	-N: Integer >= 1.
+	-p: Prime number.
+Output:
+	A list of pairs <s,rhobars> where
+		-s is an LMFDB of a Galois orbit appearing for a Cuspidal Eigensystem at level Gamma0(N) in weight <= p+1.
+		-rhobars are the list of the correpsonding mod p Galois representations.
+	
+Note: This is not a *complete* list of the rhobars. Rather, this is a list of twist class representatives appearing just in Cuspidal Space.
+	There may also be repeats.
+
+*/
+
+function rhobars_fixed_level(N,p:neben:=-1,newforms:=false,sign:=1,verbose:=false)
+	T := get_time_print("Finding all " cat Sprint(p) cat "-adic rhobars in level N=" cat Sprint(N):verbose:=verbose);
+	eis_low_wts := [];
+	cusp_low_wts := [];
+	for k in [2..p+1 by 2] do
+		eis_low_wts := eis_low_wts cat eisenstein_rhobars_fixed_level_and_weight(N,k,p:neben:=neben,newforms:=newforms,sign:=sign,verbose:=iterate_verbose(verbose));
+	end for;
+	for k in [2..p+1 by 2] do
+		cusp_low_wts := cusp_low_wts cat cuspidal_rhobars_fixed_level_and_weight(N,k,p:neben:=neben,newforms:=newforms,sign:=sign,verbose:=iterate_verbose(verbose));
+	end for; 
+
+	rhobars := generate_all_rhobars(eis_low_wts,cusp_low_wts,p);
+	time_print_elapsed(Cputime(T):verbose:=verbose);
+	return rhobars;
+end function;
+
+/*
+
+Input:
+	-N: An integer >= 1.
+	-p: A prime number.
+	
+Output:
+	Prints out a list of lines that will be put into a csv file.
+
+*/
+
+procedure rhobars_save_fixed_level(N,p:savefile:=true,logfile:=true,filename:="",neben:=-1,newforms:=false,sign:=1,verbose:=false)
+
+	if (savefile and filename eq "") or (not savefile) then
+		filename := "Gamma0-" cat Sprint(N) cat "_" cat Sprint(p) cat "_rhobar.csv";
+	end if;
+	if logfile then
+		log_filename := filename cat ".log";
+		if Type(verbose) eq BoolElt and verbose eq false then
+			verbose := 0;
+		end if;
+		SetLogFile(log_filename);
+	end if;
+	
+	if savefile then
+		header_line := "N,p,k,Nnew,LMFDB,rhobar,alpha,twist,global_red,local_red";
+		Write(filename,header_line:Overwrite:=true);
+	end if;
+	
+	rhobars_data := rhobars_fixed_level(N,p:neben:=neben,newforms:=newforms,sign:=sign,verbose:=verbose);
+	for orbit_data in rhobars_data do
+		Nnew := orbit_data[1];
+		k := orbit_data[2];
+		LMFDB_label := orbit_data[3];
+		rhobar := orbit_data[4];
+		alpha := orbit_data[5];
+		twist := orbit_data[6];
+		global_red := orbit_data[7];
+		local_red := orbit_data[8];
+		line := rhobar_csv_line(N,p,k,Nnew,LMFDB_label,rhobar,alpha,twist,global_red,local_red);
+		if savefile then
+			Write(filename,rhobar_csv_line(N,p,k,Nnew,LMFDB_label,rhobar,alpha,twist,global_red,local_red));
+		else
+			print line;
+		end if;
+	end for;
+	
+	if logfile then
+		UnsetLogFile();
+	end if;
+end procedure;

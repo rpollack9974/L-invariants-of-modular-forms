@@ -1,0 +1,16 @@
+function aa(mat)
+     return mat[1,1];
+end function;
+
+function bb(mat)
+     return mat[1,2];
+end function;
+
+function cc(mat)
+     return mat[2,1];
+end function;
+
+function dd(mat)
+     return mat[2,2];
+end function;
+
